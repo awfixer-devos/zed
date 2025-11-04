@@ -6821,6 +6821,14 @@ impl Render for Workspace {
                                                         window,
                                                         cx,
                                                     ))
+                                                    // .child(
+                                                        // TODO!
+                                                        // Render "aside pane" child
+                                                        // div()
+                                                        //     .h_full()
+                                                        //     .w_3()
+                                                        //     .bg(gpui::red())
+                                                    // )
                                                     .child(
                                                         div()
                                                             .flex()
