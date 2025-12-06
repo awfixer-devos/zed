@@ -316,6 +316,7 @@ struct ExtensionProviderConfigurationView {
     loading_settings: bool,
     loading_credentials: bool,
     oauth_in_progress: bool,
+    oauth_error: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -354,6 +355,7 @@ impl ExtensionProviderConfigurationView {
             loading_settings: true,
             loading_credentials: true,
             oauth_in_progress: false,
+            oauth_error: None,
             _subscriptions: vec![state_subscription],
         };
 
@@ -608,6 +610,7 @@ impl ExtensionProviderConfigurationView {
         }
 
         self.oauth_in_progress = true;
+        self.oauth_error = None;
         cx.notify();
 
         let extension = self.extension.clone();
@@ -620,7 +623,7 @@ impl ExtensionProviderConfigurationView {
                     let provider_id = provider_id.clone();
                     |ext, store| {
                         async move {
-                            ext.call_llm_provider_authenticate(store, &provider_id)
+                            ext.call_llm_provider_start_oauth_sign_in(store, &provider_id)
                                 .await
                         }
                         .boxed()
@@ -628,13 +631,7 @@ impl ExtensionProviderConfigurationView {
                 })
                 .await;
 
-            this.update(cx, |this, cx| {
-                this.oauth_in_progress = false;
-                cx.notify();
-            })
-            .log_err();
-
-            match result {
+            let error_message = match &result {
                 Ok(Ok(Ok(()))) => {
                     let _ = cx.update(|cx| {
                         state.update(cx, |state, cx| {
@@ -642,17 +639,28 @@ impl ExtensionProviderConfigurationView {
                             cx.notify();
                         });
                     });
+                    None
                 }
                 Ok(Ok(Err(e))) => {
                     log::error!("OAuth authentication failed: {}", e);
+                    Some(e.clone())
                 }
                 Ok(Err(e)) => {
                     log::error!("OAuth authentication error: {}", e);
+                    Some(e.to_string())
                 }
                 Err(e) => {
                     log::error!("OAuth authentication error: {}", e);
+                    Some(e.to_string())
                 }
-            }
+            };
+
+            this.update(cx, |this, cx| {
+                this.oauth_in_progress = false;
+                this.oauth_error = error_message;
+                cx.notify();
+            })
+            .log_err();
         })
         .detach();
     }
@@ -817,6 +825,8 @@ impl gpui::Render for ExtensionProviderConfigurationView {
 
                 let oauth_in_progress = self.oauth_in_progress;
 
+                let oauth_error = self.oauth_error.clone();
+
                 content = content.child(
                     v_flex()
                         .gap_2()
@@ -833,6 +843,33 @@ impl gpui::Render for ExtensionProviderConfigurationView {
                                 Label::new("Waiting for authentication...")
                                     .size(LabelSize::Small)
                                     .color(Color::Muted),
+                            )
+                        })
+                        .when_some(oauth_error, |this, error| {
+                            this.child(
+                                v_flex()
+                                    .gap_1()
+                                    .child(
+                                        h_flex()
+                                            .gap_2()
+                                            .child(
+                                                ui::Icon::new(ui::IconName::Warning)
+                                                    .color(Color::Error)
+                                                    .size(ui::IconSize::Small),
+                                            )
+                                            .child(
+                                                Label::new("Authentication failed")
+                                                    .color(Color::Error)
+                                                    .size(LabelSize::Small),
+                                            ),
+                                    )
+                                    .child(
+                                        div().pl_6().child(
+                                            Label::new(error)
+                                                .color(Color::Error)
+                                                .size(LabelSize::Small),
+                                        ),
+                                    ),
                             )
                         }),
                 );

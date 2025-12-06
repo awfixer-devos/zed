@@ -184,7 +184,16 @@ world extension {
     export llm-provider-is-authenticated: func(provider-id: string) -> bool;
 
     /// Attempt to authenticate the provider.
+    /// This is called for background credential checks - it should check for
+    /// existing credentials and return Ok if found, or an error if not.
+    /// For interactive OAuth flows, use llm-provider-start-oauth-sign-in instead.
     export llm-provider-authenticate: func(provider-id: string) -> result<_, string>;
+
+    /// Start an interactive OAuth sign-in flow.
+    /// This is called when the user explicitly clicks "Sign in with GitHub" or similar.
+    /// Unlike llm-provider-authenticate, this should open a browser and perform
+    /// the full interactive OAuth flow.
+    export llm-provider-start-oauth-sign-in: func(provider-id: string) -> result<_, string>;
 
     /// Reset credentials for the provider.
     export llm-provider-reset-credentials: func(provider-id: string) -> result<_, string>;

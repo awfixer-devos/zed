@@ -1,7 +1,10 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use base64::Engine;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use url::Url;
 use zed_extension_api::http_client::{HttpMethod, HttpRequest, HttpResponseStream, RedirectPolicy};
 use zed_extension_api::{self as zed, *};
@@ -504,12 +507,26 @@ This extension requires an active GitHub Copilot subscription.
     }
 
     fn llm_provider_authenticate(&mut self, _provider_id: &str) -> Result<(), String> {
+        // Check if we have existing credentials
+        if llm_get_credential("copilot-chat").is_some() {
+            return Ok(());
+        }
+
+        // No credentials found - return error for background auth checks.
+        // The OAuth flow will be triggered by the host when the user clicks
+        // the "Sign in with GitHub" button, which calls llm_provider_start_oauth_sign_in.
+        Err("CredentialsNotFound".to_string())
+    }
+
+    fn llm_provider_start_oauth_sign_in(&mut self, _provider_id: &str) -> Result<(), String> {
         let state = generate_random_state();
+        let code_verifier = generate_pkce_verifier();
+        let code_challenge = generate_pkce_challenge(&code_verifier);
 
         let result = llm_oauth_start_web_auth(&LlmOauthWebAuthConfig {
             auth_url: format!(
-                "https://github.com/login/oauth/authorize?client_id={}&scope=read:user&state={}",
-                GITHUB_COPILOT_CLIENT_ID, state
+                "https://github.com/login/oauth/authorize?client_id={}&redirect_uri=http://127.0.0.1:{{port}}/callback&scope=read:user&state={}&code_challenge={}&code_challenge_method=S256",
+                GITHUB_COPILOT_CLIENT_ID, state, code_challenge
             ),
             callback_path: "/callback".to_string(),
             timeout_secs: Some(300),
@@ -542,8 +559,8 @@ This extension requires an active GitHub Copilot subscription.
                 ),
             ],
             body: format!(
-                "client_id={}&code={}&redirect_uri=http://localhost:{}/callback",
-                GITHUB_COPILOT_CLIENT_ID, code, result.port
+                "client_id={}&code={}&redirect_uri=http://127.0.0.1:{}/callback&code_verifier={}",
+                GITHUB_COPILOT_CLIENT_ID, code, result.port, code_verifier
             ),
         })?;
 
@@ -756,11 +773,95 @@ This extension requires an active GitHub Copilot subscription.
 }
 
 fn generate_random_state() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-    format!("{:x}{:x}", duration.as_secs(), duration.subsec_nanos())
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 32] = rng.gen();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_pkce_verifier() -> String {
+    let mut rng = rand::thread_rng();
+    let bytes: [u8; 32] = rng.gen();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(bytes)
+}
+
+fn generate_pkce_challenge(verifier: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(verifier.as_bytes());
+    let hash = hasher.finalize();
+    base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(hash)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pkce_challenge_generation() {
+        let verifier = generate_pkce_verifier();
+        let challenge = generate_pkce_challenge(&verifier);
+
+        // Verifier should be base64url encoded 32 bytes = 43 characters
+        assert_eq!(verifier.len(), 43);
+
+        // Challenge should be base64url encoded SHA256 hash = 43 characters
+        assert_eq!(challenge.len(), 43);
+
+        // Challenge should be deterministic for same verifier
+        let challenge2 = generate_pkce_challenge(&verifier);
+        assert_eq!(challenge, challenge2);
+
+        // Different verifiers should produce different challenges
+        let verifier2 = generate_pkce_verifier();
+        let challenge3 = generate_pkce_challenge(&verifier2);
+        assert_ne!(challenge, challenge3);
+    }
+
+    #[test]
+    fn test_auth_url_template_with_pkce() {
+        let state = "test_state";
+        let code_challenge = "test_challenge_abc123";
+        let template = format!(
+            "https://github.com/login/oauth/authorize?client_id={}&redirect_uri=http://127.0.0.1:{{port}}/callback&scope=read:user&state={}&code_challenge={}&code_challenge_method=S256",
+            GITHUB_COPILOT_CLIENT_ID, state, code_challenge
+        );
+
+        // Verify the template contains {port} placeholder
+        assert!(
+            template.contains("{port}"),
+            "Template should contain {{port}} placeholder, got: {}",
+            template
+        );
+
+        // Simulate what the host does
+        let port = 54321;
+        let final_url = template.replace("{port}", &port.to_string());
+
+        // Verify it's a valid URL with all expected params
+        let parsed = Url::parse(&final_url).expect("should be a valid URL");
+        assert_eq!(parsed.scheme(), "https");
+        assert_eq!(parsed.host_str(), Some("github.com"));
+        assert_eq!(parsed.path(), "/login/oauth/authorize");
+
+        let params: HashMap<_, _> = parsed.query_pairs().collect();
+        assert_eq!(
+            params.get("client_id").map(|s| s.as_ref()),
+            Some("Iv1.b507a08c87ecfe98")
+        );
+        assert_eq!(
+            params.get("redirect_uri").map(|s| s.as_ref()),
+            Some("http://127.0.0.1:54321/callback")
+        );
+        assert_eq!(params.get("scope").map(|s| s.as_ref()), Some("read:user"));
+        assert_eq!(params.get("state").map(|s| s.as_ref()), Some("test_state"));
+        assert_eq!(
+            params.get("code_challenge").map(|s| s.as_ref()),
+            Some("test_challenge_abc123")
+        );
+        assert_eq!(
+            params.get("code_challenge_method").map(|s| s.as_ref()),
+            Some("S256")
+        );
+    }
 }
 
 zed::register_extension!(CopilotChatProvider);

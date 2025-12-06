@@ -257,6 +257,9 @@ interface llm-provider {
     record oauth-web-auth-config {
         /// The URL to open in the user's browser to start authentication.
         /// This should include client_id, redirect_uri, scope, state, etc.
+        /// Use `{port}` as a placeholder in the URL - it will be replaced with
+        /// the actual localhost port before opening the browser.
+        /// Example: "https://example.com/oauth?redirect_uri=http://127.0.0.1:{port}/callback"
         auth-url: string,
         /// The path to listen on for the OAuth callback (e.g., "/callback").
         /// A localhost server will be started to receive the redirect.

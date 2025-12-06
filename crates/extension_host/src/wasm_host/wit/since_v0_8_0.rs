@@ -1302,8 +1302,9 @@ impl llm_provider::Host for WasmState {
                     .map_err(|e| anyhow::anyhow!("Failed to get local address: {}", e))?
                     .port();
 
+                let auth_url_with_port = auth_url.replace("{port}", &port.to_string());
                 cx.update(|cx| {
-                    cx.open_url(&auth_url);
+                    cx.open_url(&auth_url_with_port);
                 })?;
 
                 let accept_future = async {

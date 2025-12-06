@@ -303,8 +303,16 @@ pub trait Extension: Send + Sync {
     }
 
     /// Attempt to authenticate the provider.
+    /// This is called for background credential checks - it should check for
+    /// existing credentials and return Ok if found, or an error if not.
     fn llm_provider_authenticate(&mut self, _provider_id: &str) -> Result<(), String> {
         Err("`llm_provider_authenticate` not implemented".to_string())
+    }
+
+    /// Start an interactive OAuth sign-in flow.
+    /// This is called when the user explicitly clicks "Sign in with GitHub" or similar.
+    fn llm_provider_start_oauth_sign_in(&mut self, _provider_id: &str) -> Result<(), String> {
+        Err("`llm_provider_start_oauth_sign_in` not implemented".to_string())
     }
 
     /// Reset credentials for the provider.
@@ -633,6 +641,10 @@ impl wit::Guest for Component {
 
     fn llm_provider_authenticate(provider_id: String) -> Result<(), String> {
         extension().llm_provider_authenticate(&provider_id)
+    }
+
+    fn llm_provider_start_oauth_sign_in(provider_id: String) -> Result<(), String> {
+        extension().llm_provider_start_oauth_sign_in(&provider_id)
     }
 
     fn llm_provider_reset_credentials(provider_id: String) -> Result<(), String> {
