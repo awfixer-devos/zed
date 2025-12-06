@@ -11,9 +11,16 @@ const GITHUB_DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
 const GITHUB_ACCESS_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 const GITHUB_COPILOT_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
 
+struct DeviceFlowState {
+    device_code: String,
+    interval: u64,
+    expires_in: u64,
+}
+
 struct CopilotChatProvider {
     streams: Mutex<HashMap<String, StreamState>>,
     next_stream_id: Mutex<u64>,
+    device_flow_state: Mutex<Option<DeviceFlowState>>,
 }
 
 struct StreamState {
@@ -428,6 +435,7 @@ impl zed::Extension for CopilotChatProvider {
         Self {
             streams: Mutex::new(HashMap::new()),
             next_stream_id: Mutex::new(0),
+            device_flow_state: Mutex::new(None),
         }
     }
 
@@ -514,11 +522,14 @@ This extension requires an active GitHub Copilot subscription.
 
         // No credentials found - return error for background auth checks.
         // The device flow will be triggered by the host when the user clicks
-        // the "Sign in with GitHub" button, which calls llm_provider_start_oauth_sign_in.
+        // the "Sign in with GitHub" button, which calls llm_provider_start_device_flow_sign_in.
         Err("CredentialsNotFound".to_string())
     }
 
-    fn llm_provider_start_oauth_sign_in(&mut self, _provider_id: &str) -> Result<(), String> {
+    fn llm_provider_start_device_flow_sign_in(
+        &mut self,
+        _provider_id: &str,
+    ) -> Result<String, String> {
         // Step 1: Request device and user verification codes
         let device_code_response = llm_oauth_http_request(&LlmOauthHttpRequest {
             url: GITHUB_DEVICE_CODE_URL.to_string(),
@@ -545,6 +556,8 @@ This extension requires an active GitHub Copilot subscription.
             device_code: String,
             user_code: String,
             verification_uri: String,
+            #[serde(default)]
+            verification_uri_complete: Option<String>,
             expires_in: u64,
             interval: u64,
         }
@@ -552,16 +565,37 @@ This extension requires an active GitHub Copilot subscription.
         let device_info: DeviceCodeResponse = serde_json::from_str(&device_code_response.body)
             .map_err(|e| format!("Failed to parse device code response: {}", e))?;
 
-        // Step 2: Open browser to verification URL with pre-filled user code
-        let verification_url = format!(
-            "{}?user_code={}",
-            device_info.verification_uri, device_info.user_code
-        );
+        // Store device flow state for polling
+        *self.device_flow_state.lock().unwrap() = Some(DeviceFlowState {
+            device_code: device_info.device_code,
+            interval: device_info.interval,
+            expires_in: device_info.expires_in,
+        });
+
+        // Step 2: Open browser to verification URL
+        // Use verification_uri_complete if available (has code pre-filled), otherwise construct URL
+        let verification_url = device_info.verification_uri_complete.unwrap_or_else(|| {
+            format!(
+                "{}?user_code={}",
+                device_info.verification_uri, &device_info.user_code
+            )
+        });
         llm_oauth_open_browser(&verification_url)?;
 
-        // Step 3: Poll for access token
-        let poll_interval = Duration::from_secs(device_info.interval.max(5));
-        let max_attempts = (device_info.expires_in / device_info.interval.max(5)) as usize;
+        // Return the user code for the host to display
+        Ok(device_info.user_code)
+    }
+
+    fn llm_provider_poll_device_flow_sign_in(&mut self, _provider_id: &str) -> Result<(), String> {
+        let state = self
+            .device_flow_state
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or("No device flow in progress")?;
+
+        let poll_interval = Duration::from_secs(state.interval.max(5));
+        let max_attempts = (state.expires_in / state.interval.max(5)) as usize;
 
         for _ in 0..max_attempts {
             thread::sleep(poll_interval);
@@ -578,7 +612,7 @@ This extension requires an active GitHub Copilot subscription.
                 ],
                 body: format!(
                     "client_id={}&device_code={}&grant_type=urn:ietf:params:oauth:grant-type:device_code",
-                    GITHUB_COPILOT_CLIENT_ID, device_info.device_code
+                    GITHUB_COPILOT_CLIENT_ID, state.device_code
                 ),
             })?;
 

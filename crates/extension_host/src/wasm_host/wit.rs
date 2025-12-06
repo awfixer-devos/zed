@@ -1241,17 +1241,39 @@ impl Extension {
         }
     }
 
-    pub async fn call_llm_provider_start_oauth_sign_in(
+    pub async fn call_llm_provider_start_device_flow_sign_in(
+        &self,
+        store: &mut Store<WasmState>,
+        provider_id: &str,
+    ) -> Result<Result<String, String>> {
+        match self {
+            Extension::V0_8_0(ext) => {
+                ext.call_llm_provider_start_device_flow_sign_in(store, provider_id)
+                    .await
+            }
+            _ => {
+                anyhow::bail!(
+                    "`llm_provider_start_device_flow_sign_in` not available prior to v0.8.0"
+                )
+            }
+        }
+    }
+
+    pub async fn call_llm_provider_poll_device_flow_sign_in(
         &self,
         store: &mut Store<WasmState>,
         provider_id: &str,
     ) -> Result<Result<(), String>> {
         match self {
             Extension::V0_8_0(ext) => {
-                ext.call_llm_provider_start_oauth_sign_in(store, provider_id)
+                ext.call_llm_provider_poll_device_flow_sign_in(store, provider_id)
                     .await
             }
-            _ => anyhow::bail!("`llm_provider_start_oauth_sign_in` not available prior to v0.8.0"),
+            _ => {
+                anyhow::bail!(
+                    "`llm_provider_poll_device_flow_sign_in` not available prior to v0.8.0"
+                )
+            }
         }
     }
 

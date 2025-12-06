@@ -16,8 +16,8 @@ use futures::stream::BoxStream;
 use futures::{FutureExt, StreamExt};
 use gpui::Focusable;
 use gpui::{
-    AnyView, App, AppContext as _, AsyncApp, Context, Entity, EventEmitter, Subscription, Task,
-    TextStyleRefinement, UnderlineStyle, Window, px,
+    AnyView, App, AppContext as _, AsyncApp, ClipboardItem, Context, Entity, EventEmitter,
+    MouseButton, Subscription, Task, TextStyleRefinement, UnderlineStyle, Window, px,
 };
 use language_model::tool_schema::LanguageModelToolSchemaFormat;
 use language_model::{
@@ -317,6 +317,7 @@ struct ExtensionProviderConfigurationView {
     loading_credentials: bool,
     oauth_in_progress: bool,
     oauth_error: Option<String>,
+    device_user_code: Option<String>,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -356,6 +357,7 @@ impl ExtensionProviderConfigurationView {
             loading_credentials: true,
             oauth_in_progress: false,
             oauth_error: None,
+            device_user_code: None,
             _subscriptions: vec![state_subscription],
         };
 
@@ -611,6 +613,7 @@ impl ExtensionProviderConfigurationView {
 
         self.oauth_in_progress = true;
         self.oauth_error = None;
+        self.device_user_code = None;
         cx.notify();
 
         let extension = self.extension.clone();
@@ -618,12 +621,13 @@ impl ExtensionProviderConfigurationView {
         let state = self.state.clone();
 
         cx.spawn(async move |this, cx| {
-            let result = extension
+            // Step 1: Start device flow - opens browser and returns user code
+            let start_result = extension
                 .call({
                     let provider_id = provider_id.clone();
                     |ext, store| {
                         async move {
-                            ext.call_llm_provider_start_oauth_sign_in(store, &provider_id)
+                            ext.call_llm_provider_start_device_flow_sign_in(store, &provider_id)
                                 .await
                         }
                         .boxed()
@@ -631,7 +635,52 @@ impl ExtensionProviderConfigurationView {
                 })
                 .await;
 
-            let error_message = match &result {
+            let user_code = match start_result {
+                Ok(Ok(Ok(code))) => code,
+                Ok(Ok(Err(e))) => {
+                    log::error!("Device flow start failed: {}", e);
+                    this.update(cx, |this, cx| {
+                        this.oauth_in_progress = false;
+                        this.oauth_error = Some(e);
+                        cx.notify();
+                    })
+                    .log_err();
+                    return;
+                }
+                Ok(Err(e)) | Err(e) => {
+                    log::error!("Device flow start error: {}", e);
+                    this.update(cx, |this, cx| {
+                        this.oauth_in_progress = false;
+                        this.oauth_error = Some(e.to_string());
+                        cx.notify();
+                    })
+                    .log_err();
+                    return;
+                }
+            };
+
+            // Update UI to show the user code before polling
+            this.update(cx, |this, cx| {
+                this.device_user_code = Some(user_code);
+                cx.notify();
+            })
+            .log_err();
+
+            // Step 2: Poll for authentication completion
+            let poll_result = extension
+                .call({
+                    let provider_id = provider_id.clone();
+                    |ext, store| {
+                        async move {
+                            ext.call_llm_provider_poll_device_flow_sign_in(store, &provider_id)
+                                .await
+                        }
+                        .boxed()
+                    }
+                })
+                .await;
+
+            let error_message = match poll_result {
                 Ok(Ok(Ok(()))) => {
                     let _ = cx.update(|cx| {
                         state.update(cx, |state, cx| {
@@ -642,15 +691,11 @@ impl ExtensionProviderConfigurationView {
                     None
                 }
                 Ok(Ok(Err(e))) => {
-                    log::error!("OAuth authentication failed: {}", e);
-                    Some(e.clone())
+                    log::error!("Device flow poll failed: {}", e);
+                    Some(e)
                 }
-                Ok(Err(e)) => {
-                    log::error!("OAuth authentication error: {}", e);
-                    Some(e.to_string())
-                }
-                Err(e) => {
-                    log::error!("OAuth authentication error: {}", e);
+                Ok(Err(e)) | Err(e) => {
+                    log::error!("Device flow poll error: {}", e);
                     Some(e.to_string())
                 }
             };
@@ -658,6 +703,7 @@ impl ExtensionProviderConfigurationView {
             this.update(cx, |this, cx| {
                 this.oauth_in_progress = false;
                 this.oauth_error = error_message;
+                this.device_user_code = None;
                 cx.notify();
             })
             .log_err();
@@ -839,10 +885,57 @@ impl gpui::Render for ExtensionProviderConfigurationView {
                                 })),
                         )
                         .when(oauth_in_progress, |this| {
+                            let user_code = self.device_user_code.clone();
                             this.child(
-                                Label::new("Waiting for authentication...")
-                                    .size(LabelSize::Small)
-                                    .color(Color::Muted),
+                                v_flex()
+                                    .gap_1()
+                                    .when_some(user_code, |this, code| {
+                                        let copied = cx
+                                            .read_from_clipboard()
+                                            .map(|item| item.text().as_ref() == Some(&code))
+                                            .unwrap_or(false);
+                                        let code_for_click = code.clone();
+                                        this.child(
+                                            h_flex()
+                                                .w_full()
+                                                .p_1()
+                                                .border_1()
+                                                .border_color(cx.theme().colors().border)
+                                                .rounded_sm()
+                                                .cursor_pointer()
+                                                .justify_between()
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    move |_, window, cx| {
+                                                        cx.write_to_clipboard(
+                                                            ClipboardItem::new_string(
+                                                                code_for_click.clone(),
+                                                            ),
+                                                        );
+                                                        window.refresh();
+                                                    },
+                                                )
+                                                .child(
+                                                    Label::new(code)
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Accent),
+                                                )
+                                                .child(
+                                                    Label::new(if copied {
+                                                        "Copied!"
+                                                    } else {
+                                                        "Click to copy"
+                                                    })
+                                                    .size(LabelSize::Small)
+                                                    .color(Color::Muted),
+                                                ),
+                                        )
+                                    })
+                                    .child(
+                                        Label::new("Waiting for authorization in browser...")
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted),
+                                    ),
                             )
                         })
                         .when_some(oauth_error, |this, error| {
