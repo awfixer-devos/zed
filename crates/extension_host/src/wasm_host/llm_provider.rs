@@ -897,37 +897,49 @@ impl gpui::Render for ExtensionProviderConfigurationView {
                                         let code_for_click = code.clone();
                                         this.child(
                                             h_flex()
-                                                .w_full()
-                                                .p_1()
-                                                .border_1()
-                                                .border_color(cx.theme().colors().border)
-                                                .rounded_sm()
-                                                .cursor_pointer()
-                                                .justify_between()
-                                                .on_mouse_down(
-                                                    MouseButton::Left,
-                                                    move |_, window, cx| {
-                                                        cx.write_to_clipboard(
-                                                            ClipboardItem::new_string(
-                                                                code_for_click.clone(),
-                                                            ),
-                                                        );
-                                                        window.refresh();
-                                                    },
-                                                )
+                                                .gap_1()
                                                 .child(
-                                                    Label::new(code)
+                                                    Label::new("Enter code:")
                                                         .size(LabelSize::Small)
-                                                        .color(Color::Accent),
+                                                        .color(Color::Muted),
                                                 )
                                                 .child(
-                                                    Label::new(if copied {
-                                                        "Copied!"
-                                                    } else {
-                                                        "Click to copy"
-                                                    })
-                                                    .size(LabelSize::Small)
-                                                    .color(Color::Muted),
+                                                    h_flex()
+                                                        .gap_1()
+                                                        .px_1()
+                                                        .border_1()
+                                                        .border_color(cx.theme().colors().border)
+                                                        .rounded_sm()
+                                                        .cursor_pointer()
+                                                        .on_mouse_down(
+                                                            MouseButton::Left,
+                                                            move |_, window, cx| {
+                                                                cx.write_to_clipboard(
+                                                                    ClipboardItem::new_string(
+                                                                        code_for_click.clone(),
+                                                                    ),
+                                                                );
+                                                                window.refresh();
+                                                            },
+                                                        )
+                                                        .child(
+                                                            Label::new(code)
+                                                                .size(LabelSize::Small)
+                                                                .color(Color::Accent),
+                                                        )
+                                                        .child(
+                                                            ui::Icon::new(if copied {
+                                                                ui::IconName::Check
+                                                            } else {
+                                                                ui::IconName::Copy
+                                                            })
+                                                            .size(ui::IconSize::Small)
+                                                            .color(if copied {
+                                                                Color::Success
+                                                            } else {
+                                                                Color::Muted
+                                                            }),
+                                                        ),
                                                 ),
                                         )
                                     })
