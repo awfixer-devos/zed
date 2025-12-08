@@ -7,44 +7,112 @@ use gpui::TestAppContext;
 use language_model::{LanguageModelRegistry, SelectedModel};
 use rand::{SeedableRng as _, rngs::StdRng};
 
-#[test]
-#[cfg_attr(not(feature = "unit-eval"), ignore)]
-fn eval_single_cursor_edit() {
-    eval_utils::eval(20, 1.0, NoProcessor, move || {
+fn run_eval_test(
+    iterations: usize,
+    expected_pass_ratio: f32,
+    prompt: String,
+    buffer: String,
+    message: String,
+    expected: String,
+) {
+    eval_utils::eval(iterations, expected_pass_ratio, NoProcessor, move || {
         run_eval(
             &EvalInput {
-                prompt: "Rename this variable to buffer_text".to_string(),
-                buffer: indoc::indoc! {"
-                    struct EvalExampleStruct {
-                        text: Strˇing,
-                        prompt: String,
-                    }
-                "}
-                .to_string(),
+                prompt: prompt.clone(),
+                buffer: buffer.clone(),
             },
             &|_, output| {
-                let expected = indoc::indoc! {"
-                    struct EvalExampleStruct {
-                        buffer_text: String,
-                        prompt: String,
-                    }
-                    "};
-                if output == expected {
+                if output == &expected {
                     EvalOutput {
                         outcome: eval_utils::OutcomeKind::Passed,
-                        data: "Passed!".to_string(),
+                        data: format!("{}: Passed!", message),
                         metadata: (),
                     }
                 } else {
                     EvalOutput {
                         outcome: eval_utils::OutcomeKind::Failed,
-                        data: format!("Failed to rename variable, output: {}", output),
+                        data: format!("{}: {}", message, output),
                         metadata: (),
                     }
                 }
             },
         )
     });
+}
+
+#[test]
+#[cfg_attr(not(feature = "unit-eval"), ignore)]
+fn eval_single_cursor_edit() {
+    run_eval_test(
+        20,
+        1.0,
+        "Rename this variable to buffer_text".to_string(),
+        indoc::indoc! {"
+            struct EvalExampleStruct {
+                text: Strˇing,
+                prompt: String,
+            }
+        "}
+        .to_string(),
+        "Failed to rename variable, output".to_string(),
+        indoc::indoc! {"
+            struct EvalExampleStruct {
+                buffer_text: String,
+                prompt: String,
+            }
+            "}
+        .to_string(),
+    );
+}
+
+#[test]
+#[cfg_attr(not(feature = "unit-eval"), ignore)]
+fn eval_cant_do() {
+    run_eval_test(
+        20,
+        1.0,
+        "Rename the struct to EvalExampleStructNope".to_string(),
+        indoc::indoc! {"
+            struct EvalExampleStruct {
+                text: Strˇing,
+                prompt: String,
+            }
+        "}
+        .to_string(),
+        "No change should have occurred, but got".to_string(),
+        indoc::indoc! {"
+            struct EvalExampleStruct {
+                text: String,
+                prompt: String,
+            }
+            "}
+        .to_string(),
+    );
+}
+
+#[test]
+#[cfg_attr(not(feature = "unit-eval"), ignore)]
+fn eval_unclear() {
+    run_eval_test(
+        20,
+        1.0,
+        "Make exactly the change I want you to make".to_string(),
+        indoc::indoc! {"
+            struct EvalExampleStruct {
+                text: Strˇing,
+                prompt: String,
+            }
+        "}
+        .to_string(),
+        "No change should have occurred, but got".to_string(),
+        indoc::indoc! {"
+            struct EvalExampleStructA {
+                text: String,
+                prompt: String,
+            }
+            "}
+        .to_string(),
+    );
 }
 
 struct EvalInput {
